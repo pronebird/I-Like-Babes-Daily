@@ -5,116 +5,110 @@
 	<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
 	<link rel="stylesheet" href="http://current.bootstrapcdn.com/bootstrap-v204/css/bootstrap.min.css" media="all" />
 	<script type="text/javascript">
-	$(document).ready(function () {
+	var last_id = null,
+		max_tweets = 20,
+		num_requests = 0, queue = [];
+	
+	function rearrange_cols() {
+		var col1 = $('#timeline .col1'),
+		 	col2 = $('#timeline .col2'),
+			tempCol = null;
 		
-		var last_id = null;
-		var max_tweets = 20;
-		var num_requests = 0, queue = [];
+		if(col1.height() < col2.height()) {
+			tempCol = col2;
+			col2 = col1;
+			col1 = tempCol;
+		}
 		
-		function rearrange_cols() {
-			//console.log('rearrange_cols');
-			var col1 = $('#timeline .col1');
-			var col2 = $('#timeline .col2');
-			//console.log(col1.height(), col2.height());
+		do {
+			var child = $('.thumbnail:last-child', col1),
+				childHeight = 0;
 			
-			if(col1.height() < col2.height()) {
-				var tempCol = col2;
-				col2 = col1;
-				col1 = tempCol;
-				//console.log('swap cols. col1 < col2');
+			if(!child.length) {
+				return;
 			}
 			
-			do {
-				var child = $('.thumbnail:last-child', col1);
-				
-				if(!child.length) {
-					return;
-				}
-				
-				var childHeight = child.height();
-				//console.log('measure: ', childHeight, col1.height()-childHeight, col2.height());
-				
-				if(col1.height()-childHeight < col2.height()) {
-					return;
-				}
-				
-				//console.log('moved +1', child, col2);
-				child.remove();
-				col2.append(child);
-			} while(col1.height() > col2.height());
-		}
+			childHeight = child.height();
+			
+			if(col1.height()-childHeight < col2.height()) {
+				return;
+			}
+			
+			child.remove();
+			col2.append(child);
+		} while(col1.height() > col2.height());
+	}
+	
+	function load_tweets(max_id)
+	{
+		$('#load_more').attr('disabled', true);
 		
-		function load_tweets(max_id)
-		{
-			$('#load_more').attr('disabled', true);
+		queue = [];
+		num_requests = 0;
+		
+		$.ajax({
+			url: 'https://twitter.com/statuses/user_timeline/iLikeBabesDaily.json?count=' + max_tweets + (max_id ? '&max_id=' + max_id : ''),
+			dataType: "jsonp",
+			crossDomain: true,
+			success: function (data) {
 			
-			queue = [];
-			num_requests = 0;
-			
-			$.ajax({
-				url: 'https://twitter.com/statuses/user_timeline/iLikeBabesDaily.json?count=' + max_tweets + (max_id ? '&max_id=' + max_id : ''),
-				dataType: "jsonp",
-				crossDomain: true,
-				success: function (data) {
+				$.each(data, function (index, obj) {
+					var test = /\b(?:(?:https?|ftp|file):\/\/)[-A-Z0-9+&@#\/%=~_|$?!:,.]*[A-Z0-9+&@#\/%=~_|$]/i,
+						links = obj.text.match(test);
 				
-					$.each(data, function (index, obj) {
-						var test = /\b(?:(?:https?|ftp|file):\/\/)[-A-Z0-9+&@#\/%=~_|$?!:,.]*[A-Z0-9+&@#\/%=~_|$]/i,
-							links = obj.text.match(test);
-						
-						//console.log(data);
+					if(index == 0) {
+						$('#userpic').attr('src', obj.user.profile_image_url).show();
+					}
+				
+					if(links && links.length && obj.id != last_id) {
+						var item = $('<div class="thumbnail"><a href="#" target="_blank"><img src="#" style="max-width:100%" alt="" /></a><div class="caption"><p></p></div></div>')
+						.find('p').text(obj.text).end()
+						.find('a').attr('href', links[0]).end()
+						.hide();
 					
-						if(index == 0) {
-							$('#userpic').attr('src', obj.user.profile_image_url).show();
-						}
-					
-						if(links && links.length && obj.id != last_id) {
-							var item = $('<div class="thumbnail"><a href="#" target="_blank"><img src="#" style="max-width:100%" alt="" /></a><div class="caption"><p></p></div></div>')
-							.find('p').text(obj.text).end()
-							.find('a').attr('href', links[0]).end()
-							.hide();
-						
-							queue.push({
-								url: 'http://api.longurl.org/v2/expand?url=' + encodeURI(links[0]) + '&format=json',
-								dataType: "jsonp",
-								crossDomain: true,
-								success: function (data) {
-									if(/(.png|.gif|.jpg|.jpeg)/.test(data['long-url'])) {
-										item.find('img')
-											.bind('load error', function () {
-												num_requests--;
-												if(num_requests < 1) {
-													rearrange_cols();
-													$('#load_more').attr('disabled', false);
-												}
-											})
-											.attr('src', data['long-url']).end()
-											.show();
-									} else {
-										num_requests--;
-									}
-								},
-								error: function () {
+						queue.push({
+							url: 'http://api.longurl.org/v2/expand?url=' + encodeURI(links[0]) + '&format=json',
+							dataType: "jsonp",
+							crossDomain: true,
+							success: function (data) {
+								if(/(.png|.gif|.jpg|.jpeg)/.test(data['long-url'])) {
+									item.find('img')
+										.bind('load error', function () {
+											num_requests--;
+											if(num_requests < 1) {
+												rearrange_cols();
+												$('#load_more').attr('disabled', false);
+											}
+										})
+										.attr('src', data['long-url']).end()
+										.show();
+								} else {
 									num_requests--;
 								}
-							});
-						
-							$('#timeline .' + (index % 2 == 0 ? 'col1' : 'col2')).append(item);
-						}
-					});
+							},
+							error: function () {
+								num_requests--;
+							}
+						});
 					
-					last_id = data[data.length-1].id;
-					num_requests = queue.length;
-					
-					$.each(queue, function (index, obj) {
-						$.ajax(obj);
-					});
-				},
-				error: function () {
-					$('#load_more').attr('disabled', false);
-				}
-			});
-		}
-		
+						$('#timeline .' + (index % 2 == 0 ? 'col1' : 'col2')).append(item);
+					}
+				});
+				
+				last_id = data[data.length-1].id;
+				num_requests = queue.length;
+				
+				$.each(queue, function (index, obj) {
+					$.ajax(obj);
+				});
+			},
+			error: function () {
+				$('#load_more').attr('disabled', false);
+			}
+		});
+	}
+	
+	$(document).ready(function () {
 		$('#load_more').click(function (evt) {
 			load_tweets(last_id);
 			evt.preventDefault();
