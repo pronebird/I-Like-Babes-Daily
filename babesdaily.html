@@ -2,156 +2,258 @@
 <html>
 <head>
 	<title>I Like Babes Daily</title>
+	<link rel="stylesheet" href="https://netdna.bootstrapcdn.com/twitter-bootstrap/2.3.2/css/bootstrap-combined.no-icons.min.css" media="all" />
+	<style type="text/css">
+	body { margin-bottom: 40px; }
+	#timeline .thumbnail { margin-bottom: 25px; }
+	</style>
 	<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
-	<link rel="stylesheet" href="//netdna.bootstrapcdn.com/twitter-bootstrap/2.3.2/css/bootstrap-combined.min.css" media="all" />
 	<script type="text/javascript">
-	var last_id = null,
-		max_tweets = 50,
-		num_requests = 0, queue = [];
-	
+	// tweets ids array used to keep track of already parsed tweets
+	var tw_ids = [];
+
+	// twitter widget stream element
+	var tw_stream = null;
+
+	// twitter widget load more button
+	var tw_load_more = null;
+
+	// detect retina
+	var is_retina = window.devicePixelRatio > 1;
+
+	// discover mutation observer
+	window.MutationObserver = window.MutationObserver || window.WebKitMutationObserver || window.MozMutationObserver;
+
+	// check for MutationObserver support
+	if(window.MutationObserver === undefined) {
+		alert('Your browser is not supported. Go get some modern browser and come back.');
+		throw 'MutationObserver is not supported by your browser.';
+	}
+
+	function mutation_callback(mutation) {
+		// accumulate tweets here
+		var tw_objects = [];
+
+		// loop through nodes and grab data
+		tw_stream.find('li.h-entry').each(function (i, element) {
+			var tw = $(element);
+			var tw_id = tw.data('tweet-id');
+
+			// check if we already have this tweet in our array
+			if(tw_ids.indexOf(tw_id) !== -1) {
+				return;
+			}
+
+			var tw_profile_image_url = tw.find('img.u-photo').attr('src');
+			var tw_text = tw.find('.e-entry-title').html();
+			var tw_detail_content = tw.find('.detail-content');
+			var tw_image_url = null;
+
+			// check twitter's html template
+			if(tw_detail_content.length > 0) {
+				var tw_expanded_html = tw_detail_content.data('expanded-media');
+				if(tw_expanded_html) {
+					var tw_expanded_content = $(tw_expanded_html);
+					var nswf = tw_expanded_content.find('.media .nsfw');
+					if(nswf.length > 0) {
+						tw_image_url = nswf.data('image');
+
+						if(is_retina) {
+							var tw_image2x_url = nswf.data('image-2x');
+							if(tw_image2x_url !== null) {
+								tw_image_url = tw_image2x_url;
+							}
+						}
+					}
+				}
+			}
+
+			// if tweet has image
+			// instantiate a payload similar to Twitter API 1.0 response
+			if(tw_image_url !== null) {
+				var obj = {};
+				obj.id = tw_id;
+				obj.user = {
+					profile_image_url: tw_profile_image_url
+				};
+				obj.text = tw_text;
+				obj.entities = {
+					media: [{
+						media_url: tw_image_url
+					}]
+				};
+				tw_objects.push(obj);
+			}
+
+			// save tweet ids to array
+			if(tw_id !== null) {
+				tw_ids.push(tw_id);
+			}
+		});
+
+		// pull in tweets on screen
+		if(tw_objects.length > 0) {
+			load_tweets(tw_objects);
+		}
+	}
+
+	function setup_twitter_widget_capture() {
+		var target = $("#twitter-capture");
+
+		// create an iframe observer
+		var iframeObserver = new MutationObserver(function(mutations) {
+			mutations.forEach(function (mutation) {
+				var target = $("#twitter-capture");
+				var iframe = target.find('iframe');
+				tw_stream = iframe.contents().find('ol.h-feed');
+				tw_load_more = iframe.contents().find('.load-more');
+
+				if(tw_stream.length > 0) {
+					// create a stream observer
+					var streamObserver = new MutationObserver(function(mutations) {
+						mutations.forEach(function (mutation) {
+							mutation_callback(mutations);
+						});
+					});
+
+					// observe user stream
+					streamObserver.observe(tw_stream.get(0), { attributes: false, childList: true, characterData: false });
+
+					// trigger mutation_callback in the very first time, because mutation happened before we hooked in
+					mutation_callback(mutation);
+
+					// disconnect iframe observer
+					iframeObserver.disconnect();
+				}
+			});
+		});
+
+		// setup initial iframe observer
+		iframeObserver.observe(target.get(0), { attributes: true, childList: true, characterData: true });
+	}
+
 	function rearrange_cols() {
 		var col1 = $('#timeline .col1'),
 		 	col2 = $('#timeline .col2'),
 			tempCol = null;
-		
+
 		if(col1.height() < col2.height()) {
 			tempCol = col2;
 			col2 = col1;
 			col1 = tempCol;
 		}
-		
+
 		do {
 			var child = $('.thumbnail:last-child', col1),
 				childHeight = 0;
-			
+
 			if(!child.length) {
 				return;
 			}
-			
+
 			childHeight = child.height();
-			
+
 			if(col1.height()-childHeight < col2.height()) {
 				return;
 			}
-			
+
 			child.remove();
 			col2.append(child);
 		} while(col1.height() > col2.height());
 	}
-	
-	function load_tweets(max_id)
-	{
+
+	function load_more_tweets() {
+		tw_load_more.trigger('click');
+	}
+
+	function load_tweets(data) {
 		$('#load_more').attr('disabled', true);
-		
-		queue = [];
-		num_requests = 0;
-		
-		$.ajax({
-			url: 'https://api.twitter.com/1.1/statuses/user_timeline/iLikeBabesDaily.json?include_entities=true&count=' + max_tweets + (max_id ? '&max_id=' + max_id : ''),
-			dataType: "jsonp",
-			crossDomain: true,
-			success: function (data) {
-				
-				function _update_stuff() {
-					if(num_requests < 1) {
-						rearrange_cols();
-						$('#load_more').attr('disabled', false);
-					}
-				}
-			
-				$.each(data, function (index, obj) {
-					var test = /\b(?:(?:https?|ftp|file):\/\/)[-A-Z0-9+&@#\/%=~_|$?!:,.]*[A-Z0-9+&@#\/%=~_|$]/i,
-						links = obj.text.match(test);
-				
-					if(index == 0) {
-						$('#userpic').attr('src', obj.user.profile_image_url).show();
-					}
-				
-					if(links && links.length && obj.id != last_id) {
-						var item = $('<div class="thumbnail"><a href="#" target="_blank"><img src="#" style="max-width:100%" alt="" /></a><div class="caption"><p></p></div></div>')
-						.find('p').text(obj.text).end()
-						.find('a').attr('href', links[0]).end()
-						.hide();
-						
-						if(obj.entities && obj.entities.media && obj.entities.media[0] && obj.entities.media[0].media_url) {
-							item.find('img')
-								.bind('load error', function () {
-								num_requests--;
-								_update_stuff();
-							})
-							.attr('src', obj.entities.media[0].media_url).end()
-							.show();
-						} else {
-							queue.push({
-								url: 'http://api.longurl.org/v2/expand?url=' + encodeURI(links[0]) + '&format=json',
-								dataType: "jsonp",
-								crossDomain: true,
-								success: function (data) {
-									if(/(.png|.gif|.jpg|.jpeg)/.test(data['long-url'])) {
-										item.find('img')
-											.bind('load error', function () {
-												num_requests--;
-												_update_stuff();
-											})
-											.attr('src', data['long-url']).end()
-											.show();
-									} else {
-										num_requests--;
-										_update_stuff();
-									}
-								},
-								error: function () {
-									num_requests--;
-									_update_stuff();
-								}
-							});
-						}
-					
-						$('#timeline .' + (index % 2 == 0 ? 'col1' : 'col2')).append(item);
-					}
-				});
-				
-				last_id = data[data.length-1].id;
-				num_requests = queue.length;
-				
-				$.each(queue, function (index, obj) {
-					$.ajax(obj);
-				});
-			},
-			error: function () {
+
+		var queue = [];
+		var num_requests = 0;
+
+		function _update_stuff() {
+			if(num_requests < 1) {
+				rearrange_cols();
 				$('#load_more').attr('disabled', false);
 			}
+		}
+
+		$.each(data, function (index, obj) {
+			var test = /\b(?:(?:https?|ftp|file):\/\/)[-A-Z0-9+&@#\/%=~_|$?!:,.]*[A-Z0-9+&@#\/%=~_|$]/i,
+				links = obj.text.match(test);
+
+			if(index == 0) {
+				$('#userpic').attr('src', obj.user.profile_image_url).show();
+			}
+
+			if(links && links.length) {
+				var item = $('<div class="thumbnail"><a href="#" target="_blank"><img src="#" style="width:100%" alt="" /></a><div class="caption"><p></p></div></div>')
+				.find('p').html(obj.text).end()
+				.find('a').attr('href', links[0]).end()
+				.hide();
+
+				if(obj.entities && obj.entities.media && obj.entities.media[0] && obj.entities.media[0].media_url) {
+					item
+					.find('a').attr('href', obj.entities.media[0].media_url).end()
+					.find('img')
+						.bind('load error', function () {
+						num_requests--;
+						_update_stuff();
+					})
+					.attr('src', obj.entities.media[0].media_url).end()
+					.show();
+				} else {
+					queue.push({
+						url: 'http://api.longurl.org/v2/expand?url=' + encodeURI(links[0]) + '&format=json',
+						dataType: "jsonp",
+						crossDomain: true,
+						success: function (data) {
+							if(/(.png|.gif|.jpg|.jpeg)/.test(data['long-url'])) {
+								item.find('img')
+									.bind('load error', function () {
+										num_requests--;
+										_update_stuff();
+									})
+									.attr('src', data['long-url']).end()
+									.show();
+							} else {
+								num_requests--;
+								_update_stuff();
+							}
+						},
+						error: function () {
+							num_requests--;
+							_update_stuff();
+						}
+					});
+				}
+
+				$('#timeline .' + (index % 2 == 0 ? 'col1' : 'col2')).append(item);
+			}
+		});
+
+		num_requests = queue.length;
+
+		$.each(queue, function (index, obj) {
+			$.ajax(obj);
 		});
 	}
-	
+
 	$(document).ready(function () {
 		$('#load_more').click(function (evt) {
-			load_tweets(last_id);
+			load_more_tweets();
 			evt.preventDefault();
 		});
-		
-		load_tweets();
+
+		setup_twitter_widget_capture();
 	});
 	</script>
-	<style type="text/css">
-	body {
-		margin-bottom:40px;
-	}
-	#timeline .thumbnail {
-		margin-bottom: 25px;
-		width:460px;
-	}
-	</style>
 </head>
 <body>
 	<div class="navbar">
 		<div class="navbar-inner">
 			<div class="container">
-				<button type="button" class="btn btn-navbar" data-toggle="collapse" data-target=".nav-collapse">
-					<span class="icon-bar"></span>
-					<span class="icon-bar"></span>
-					<span class="icon-bar"></span>
-				</button>
 				<a class="brand" href="https://twitter.com/#!/iLikeBabesDaily"><span style="width:24px;height:24px;display:inline-block;vertical-align:text-top;"><img src="#" id="userpic" style="display:none;width:24px;height:24px;border-radius:4px;" /></span> @iLikeBabesDaily</a>
 			</div>
 		</div>
@@ -162,13 +264,19 @@
 			<div class="col2 span6"></div>
 		</div>
 		<p style="text-align:center;"><button id="load_more" class="btn btn-large" disabled="disabled">Load more</button></p>
-		
+
 		<div class="footer">
 			<p class="pull-right"><a href="#">Back to top</a></p>
 			<p>Naturally designed and built by <a href="http://twitter.com/pronebird" target="_blank">@pronebird</a>.</p>
-			<p>This is a secret page. However if you get here, make sure you are over 18 before using it. Stuff is not mine, blame twitter.</p>
+			<p>This stuff is not mine, blame twitter.</p>
 		</div>
 	</div>
+
+	<!-- twitter widget snippet -->
+	<div id="twitter-capture" style="display:none;">
+		<div class="twitter-timeline" data-dnt="true" href="https://twitter.com/iLikeBabesDaily" data-widget-id="389757509575000064"></div>
+	</div>
+	<script>!function(d,s,id){var js,fjs=d.getElementsByTagName(s)[0],p=/^http:/.test(d.location)?'http':'https';if(!d.getElementById(id)){js=d.createElement(s);js.id=id;js.src=p+"://platform.twitter.com/widgets.js";fjs.parentNode.insertBefore(js,fjs);}}(document,"script","twitter-wjs");</script>
 
 </body>
 </html>
